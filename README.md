@@ -14,8 +14,9 @@ Hệ thống này cho phép đóng gói file PDF `color-test-page.pdf` và kịc
 ## 💻 Hướng dẫn dành cho Người dùng cuối (Client chạy Debian)
 
 Người dùng cuối chỉ cần sao chép và chạy lệnh sau trên máy chủ/máy trạm Debian để bắt đầu cài đặt:
-
-curl -fsSL https://raw.githubusercontent.com/mr-old-youtube/print-automation/main/setup.sh | sudo bash
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/mr-old-youtube/print-automation/main/setup.sh | sudo bash
+  ```
 
 
 ### Quá trình cài đặt tự động sẽ hỏi người dùng:
