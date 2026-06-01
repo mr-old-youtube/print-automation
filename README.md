@@ -76,15 +76,17 @@ Bạn có thể gỡ cài đặt hệ thống in tự động một cách nhanh 
 
 ### Cách 1: Chạy trực tiếp từ file cài đặt đã tải (Khuyên dùng)
 Nếu file cài đặt `setup.sh` vẫn còn trên máy, hãy chạy lệnh sau:
-
+```bash
 sudo ./setup.sh --uninstall
+```
 
 Hoặc đơn giản là chạy lại lệnh cài đặt thông thường (`sudo ./setup.sh`), hệ thống sẽ tự động phát hiện bản cài đặt cũ và hỏi bạn có muốn gỡ cài đặt hay không.
 
 ### Cách 2: Chạy trực tiếp qua mạng (Không cần lưu file)
 Bạn có thể chạy lệnh gỡ cài đặt trực tuyến bằng cách truyền thêm tham số `--uninstall` vào sau kịch bản chạy:
-
+  ```bash
   curl -fsSL https://raw.githubusercontent.com/mr-old-youtube/print-automation/main/setup.sh | sudo bash -s -- --uninstall
+  ```
 
 ### Cách 3: Gỡ cài đặt thủ công (Nếu muốn)
 Chạy các lệnh sau dưới quyền root để gỡ cài đặt thủ công:
