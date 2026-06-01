@@ -6,6 +6,25 @@
 
 set -e
 
+# Khai báo các biến lưu cấu hình hiện tại để làm mặc định
+CURRENT_PRINTER=""
+CURRENT_MIN="0"
+CURRENT_HOUR="8"
+CURRENT_DAYS="*"
+
+# Đọc cấu hình hiện tại nếu hệ thống đã cài đặt
+if [ -f "/opt/print-automation/print-job.sh" ]; then
+    CURRENT_PRINTER=$(grep "PRINTER_NAME=" /opt/print-automation/print-job.sh | head -n1 | cut -d'"' -f2)
+fi
+
+if [ -f "/etc/cron.d/print-automation" ]; then
+    # Đọc cấu hình lịch cron hiện tại (Phút Giờ NgàyTháng Tháng NgàyTuần User Command)
+    read -r c_min c_hour c_dom c_mon c_dow c_user c_cmd < "/etc/cron.d/print-automation"
+    CURRENT_MIN=${c_min:-0}
+    CURRENT_HOUR=${c_hour:-8}
+    CURRENT_DAYS=${c_dow:-*}
+fi
+
 # Khai báo hàm gỡ cài đặt hệ thống
 uninstall_system() {
     echo "======================================================================"
@@ -66,12 +85,18 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Xử lý tham số dòng lệnh (ví dụ: --uninstall)
+# Xử lý tham số dòng lệnh (ví dụ: --uninstall, --reconfigure)
 UNINSTALL_MODE=false
+RECONFIGURE_MODE=false
+
 for arg in "$@"; do
     case $arg in
         -u|--uninstall)
             UNINSTALL_MODE=true
+            shift
+            ;;
+        -c|--reconfigure)
+            RECONFIGURE_MODE=true
             shift
             ;;
     esac
@@ -82,13 +107,22 @@ if [ "$UNINSTALL_MODE" = true ]; then
     uninstall_system
 fi
 
-# Tự động phát hiện phiên bản cài đặt cũ
-if [ -d "/opt/print-automation" ] || [ -f "/etc/cron.d/print-automation" ]; then
+SKIP_DEPS=false
+if [ "$RECONFIGURE_MODE" = true ]; then
+    SKIP_DEPS=true
+fi
+
+# Tự động phát hiện phiên bản cài đặt cũ khi chạy không có cờ cấu hình trước
+if [ "$RECONFIGURE_MODE" = false ] && { [ -d "/opt/print-automation" ] || [ -f "/etc/cron.d/print-automation" ]; }; then
     echo "======================================================================"
     echo "    HỆ THỐNG IN TỰ ĐỘNG ĐÃ ĐƯỢC CÀI ĐẶT TRÊN MÁY NÀY"
     echo "======================================================================"
+    echo "Cấu hình hiện tại:"
+    echo " - Máy in: ${CURRENT_PRINTER:-'(Mặc định)'}"
+    echo " - Lịch chạy Cron: $CURRENT_MIN $CURRENT_HOUR * * $CURRENT_DAYS"
+    echo "----------------------------------------------------------------------"
     echo "Vui lòng chọn thao tác bạn muốn thực hiện:"
-    echo "1) Cài đặt lại / Cấu hình lại lịch in (Reconfigure)"
+    echo "1) Chỉnh sửa cấu hình / Thay đổi lịch in (Reconfigure)"
     echo "2) Gỡ cài đặt hoàn toàn hệ thống (Uninstall)"
     echo "3) Thoát (Exit)"
     echo "----------------------------------------------------------------------"
@@ -97,7 +131,8 @@ if [ -d "/opt/print-automation" ] || [ -f "/etc/cron.d/print-automation" ]; then
         read -p "Lựa chọn của bạn (1-3): " ALREADY_CHOICE < /dev/tty
         case "$ALREADY_CHOICE" in
             1)
-                echo "Bắt đầu cập nhật cấu hình hệ thống..."
+                echo "Bắt đầu cập nhật cấu hình hệ thống (Sẽ bỏ qua cập nhật apt để chạy nhanh)..."
+                SKIP_DEPS=true
                 echo
                 break
                 ;;
@@ -116,42 +151,47 @@ if [ -d "/opt/print-automation" ] || [ -f "/etc/cron.d/print-automation" ]; then
 fi
 
 echo "======================================================================"
-echo "    BẮT ĐẦU CÀI ĐẶT HỆ THỐNG TỰ ĐỘNG IN FILE (COLOR TEST PAGE)"
+echo "    BẮT ĐẦU CÀI ĐẶT/CẤU HÌNH HỆ THỐNG IN FILE THEO LỊCH"
 echo "======================================================================"
 echo
 
-# 1. Cập nhật và cài đặt dependencies
-echo ">>> Bước 1: Cài đặt các gói phụ thuộc (cups, cups-client, cron)..."
-apt-get update -y
+# 1. Cập nhật và cài đặt dependencies (Chỉ chạy khi cài mới)
+if [ "$SKIP_DEPS" = false ]; then
+    echo ">>> Bước 1: Cài đặt các gói phụ thuộc (cups, cups-client, cron)..."
+    apt-get update -y
 
-install_if_missing() {
-    local pkg=$1
-    if ! dpkg -l | grep -q "^ii  $pkg "; then
-        echo "Đang cài đặt $pkg..."
-        apt-get install -y "$pkg"
-    else
-        echo "- $pkg đã được cài đặt."
-    fi
-}
+    install_if_missing() {
+        local pkg=$1
+        if ! dpkg -l | grep -q "^ii  $pkg "; then
+            echo "Đang cài đặt $pkg..."
+            apt-get install -y "$pkg"
+        else
+            echo "- $pkg đã được cài đặt."
+        fi
+    }
 
-install_if_missing cups
-install_if_missing cups-client
-install_if_missing cron
+    install_if_missing cups
+    install_if_missing cups-client
+    install_if_missing cron
 
-# Đảm bảo các services đang chạy
-echo "Kích hoạt và chạy các dịch vụ..."
-systemctl enable cups || true
-systemctl start cups || true
-systemctl enable cron || true
-systemctl start cron || true
+    # Đảm bảo các services đang chạy
+    echo "Kích hoạt và chạy các dịch vụ..."
+    systemctl enable cups || true
+    systemctl start cups || true
+    systemctl enable cron || true
+    systemctl start cron || true
 
-echo "Đã cài đặt và kích hoạt thành công các dịch vụ cần thiết."
-echo
+    echo "Đã cài đặt và kích hoạt thành công các dịch vụ cần thiết."
+    echo
+else
+    echo ">>> Bước 1: Bỏ qua cài đặt gói phụ thuộc (Đã có sẵn trên hệ thống)..."
+    echo
+fi
 
 # 2. Cấu hình máy in
 echo ">>> Bước 2: Cấu hình và chọn máy in..."
 echo "Đang kiểm tra các máy in đã được cấu hình trên hệ thống..."
-sleep 2
+sleep 1
 
 # Lấy danh sách máy in từ CUPS
 PRINTER_LIST=()
@@ -165,17 +205,31 @@ SELECTED_PRINTER=""
 if [ ${#PRINTER_LIST[@]} -eq 0 ]; then
     echo "CẢNH BÁO: Hiện tại hệ thống CUPS chưa có máy in nào được cấu hình."
     echo "Bạn có thể cấu hình máy in sau. Xem hướng dẫn tại giao diện web CUPS: http://localhost:631"
-    read -p "Nhập tên máy in muốn sử dụng (để trống nếu sử dụng máy in mặc định): " SELECTED_PRINTER < /dev/tty
+    read -p "Nhập tên máy in muốn sử dụng (để trống nếu sử dụng máy in mặc định) [Mặc định: ${CURRENT_PRINTER:-Không có}]: " SELECTED_PRINTER < /dev/tty
+    SELECTED_PRINTER=${SELECTED_PRINTER:-$CURRENT_PRINTER}
 else
     echo "Tìm thấy danh sách các máy in sau:"
-    echo "0) Sử dụng máy in mặc định của hệ thống"
+    
+    # Xác định chỉ mục mặc định
+    DEFAULT_CHOICE=0
+    if [ -z "$CURRENT_PRINTER" ]; then
+        echo "0) Sử dụng máy in mặc định của hệ thống (Default) [Đang dùng]"
+    else
+        echo "0) Sử dụng máy in mặc định của hệ thống (Default)"
+    fi
+    
     for i in "${!PRINTER_LIST[@]}"; do
-        echo "$((i+1))) ${PRINTER_LIST[$i]}"
+        if [ "${PRINTER_LIST[$i]}" = "$CURRENT_PRINTER" ]; then
+            echo "$((i+1))) ${PRINTER_LIST[$i]} [Đang dùng]"
+            DEFAULT_CHOICE=$((i+1))
+        else
+            echo "$((i+1))) ${PRINTER_LIST[$i]}"
+        fi
     done
     
     while true; do
-        read -p "Chọn số thứ tự máy in muốn cấu hình (0-${#PRINTER_LIST[@]}) [Mặc định: 0]: " PRINTER_CHOICE < /dev/tty
-        PRINTER_CHOICE=${PRINTER_CHOICE:-0}
+        read -p "Chọn số thứ tự máy in muốn cấu hình (0-${#PRINTER_LIST[@]}) [Mặc định: $DEFAULT_CHOICE]: " PRINTER_CHOICE < /dev/tty
+        PRINTER_CHOICE=${PRINTER_CHOICE:-$DEFAULT_CHOICE}
         
         if [ "$PRINTER_CHOICE" -eq 0 ]; then
             SELECTED_PRINTER=""
@@ -195,8 +249,8 @@ echo
 # 3. Cấu hình thời gian chạy lịch in tự động
 echo ">>> Bước 3: Lên lịch thời gian in tự động..."
 while true; do
-    read -p "Nhập giờ muốn in (0-23) [Mặc định: 8]: " INPUT_HOUR < /dev/tty
-    INPUT_HOUR=${INPUT_HOUR:-8}
+    read -p "Nhập giờ muốn in (0-23) [Mặc định: $CURRENT_HOUR]: " INPUT_HOUR < /dev/tty
+    INPUT_HOUR=${INPUT_HOUR:-$CURRENT_HOUR}
     if [[ "$INPUT_HOUR" =~ ^[0-9]+$ ]] && [ "$INPUT_HOUR" -ge 0 ] && [ "$INPUT_HOUR" -le 23 ]; then
         HOUR=$INPUT_HOUR
         break
@@ -206,8 +260,8 @@ while true; do
 done
 
 while true; do
-    read -p "Nhập phút muốn in (0-59) [Mặc định: 0]: " INPUT_MIN < /dev/tty
-    INPUT_MIN=${INPUT_MIN:-0}
+    read -p "Nhập phút muốn in (0-59) [Mặc định: $CURRENT_MIN]: " INPUT_MIN < /dev/tty
+    INPUT_MIN=${INPUT_MIN:-$CURRENT_MIN}
     if [[ "$INPUT_MIN" =~ ^[0-9]+$ ]] && [ "$INPUT_MIN" -ge 0 ] && [ "$INPUT_MIN" -le 59 ]; then
         MIN=$INPUT_MIN
         break
@@ -216,14 +270,25 @@ while true; do
     fi
 done
 
+# Xác định tùy chọn ngày mặc định dựa trên dữ liệu cron cũ
+DEFAULT_DAY_CHOICE=1
+if [ "$CURRENT_DAYS" = "1-5" ]; then
+    DEFAULT_DAY_CHOICE=2
+elif [ "$CURRENT_DAYS" = "6,0" ] || [ "$CURRENT_DAYS" = "0,6" ]; then
+    DEFAULT_DAY_CHOICE=3
+elif [ "$CURRENT_DAYS" != "*" ]; then
+    DEFAULT_DAY_CHOICE=4
+fi
+
 echo "Chọn các ngày trong tuần bạn muốn in:"
-echo "1) Hàng ngày"
-echo "2) Các ngày làm việc (Thứ 2 đến Thứ 6)"
-echo "3) Ngày cuối tuần (Thứ 7 & Chủ Nhật)"
-echo "4) Lựa chọn ngày cụ thể"
+echo "1) Hàng ngày $([ "$DEFAULT_DAY_CHOICE" -eq 1 ] && echo "[Đang dùng]")"
+echo "2) Các ngày làm việc (Thứ 2 đến Thứ 6) $([ "$DEFAULT_DAY_CHOICE" -eq 2 ] && echo "[Đang dùng]")"
+echo "3) Ngày cuối tuần (Thứ 7 & Chủ Nhật) $([ "$DEFAULT_DAY_CHOICE" -eq 3 ] && echo "[Đang dùng]")"
+echo "4) Lựa chọn ngày cụ thể $([ "$DEFAULT_DAY_CHOICE" -eq 4 ] && echo "[Đang dùng: $CURRENT_DAYS]")"
+
 while true; do
-    read -p "Nhập lựa chọn của bạn (1-4) [Mặc định: 1]: " DAY_CHOICE < /dev/tty
-    DAY_CHOICE=${DAY_CHOICE:-1}
+    read -p "Nhập lựa chọn của bạn (1-4) [Mặc định: $DEFAULT_DAY_CHOICE]: " DAY_CHOICE < /dev/tty
+    DAY_CHOICE=${DAY_CHOICE:-$DEFAULT_DAY_CHOICE}
     
     case "$DAY_CHOICE" in
         1)
@@ -244,7 +309,13 @@ while true; do
         4)
             echo "Nhập danh sách ngày cách nhau bằng dấu phẩy:"
             echo "  1: Thứ 2, 2: Thứ 3, 3: Thứ 4, 4: Thứ 5, 5: Thứ 6, 6: Thứ 7, 0: Chủ Nhật"
-            read -p "Ví dụ (1,3,5 - Thứ 2, 4, 6): " CUSTOM_DAYS < /dev/tty
+            DEFAULT_CUSTOM=""
+            if [ "$DEFAULT_DAY_CHOICE" -eq 4 ]; then
+                DEFAULT_CUSTOM="$CURRENT_DAYS"
+            fi
+            read -p "Ví dụ (1,3,5 - Thứ 2, 4, 6) [Mặc định: ${DEFAULT_CUSTOM:-1,3,5}]: " CUSTOM_DAYS < /dev/tty
+            CUSTOM_DAYS=${CUSTOM_DAYS:-$DEFAULT_CUSTOM}
+            CUSTOM_DAYS=${CUSTOM_DAYS:-1,3,5}
             if [[ "$CUSTOM_DAYS" =~ ^[0-6](,[0-6])*$ ]]; then
                 CRON_DAYS="$CUSTOM_DAYS"
                 DAY_DESC="Các ngày cụ thể ($CRON_DAYS)"
@@ -341,7 +412,7 @@ echo
 
 # 7. In thử nghiệm (Tùy chọn)
 echo "======================================================================"
-echo "    CÀI ĐẶT HOÀN TẤT!"
+echo "    CÀI ĐẶT/CẬU HÌNH HOÀN TẤT!"
 echo "======================================================================"
 echo "Máy in đã cấu hình: ${SELECTED_PRINTER:-'(Máy in mặc định của hệ thống)'}"
 echo "Thời gian in: $(printf "%02d" $HOUR):$(printf "%02d" $MIN) - Lịch: $DAY_DESC"
